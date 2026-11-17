@@ -1,0 +1,32 @@
+# Every pipeline setting, in one place. A pipeline config names this file with
+# `extends:` and overrides only what makes it that run.
+#
+# `train_config` and `smoke_config` are paths, not nested configs: the training
+# configs stay usable on their own, with `python -m bevaligner.train`.
+run_name: bevaligner
+train_config: bevaligner/configs/gpu24.yaml
+smoke_config: bevaligner/configs/t4_smoke.yaml
+# appended to the train argv verbatim, so `key=value` overrides and flags
+# such as `--max-steps 5000` both work
+train_overrides: []
+eval_overrides: []
+
+splits:
+  dir: datasets/splits
+  prefix: 100_prod
+  source_csv: datasets/100_prod_merged.csv
+  fractions: {train: 0.75, val: 0.15, test: 0.10}
+  seed: 0
+
+preprocess:
+  workers: 16
+
+eval:
+  qualitative: 5
+  images: true              # per-photograph poses, one images.json per reality
+  images_plot: false        # and floormap.png beside each one
+  checkpoint: null          # default: <run_dir>/checkpoints/last.ckpt
+
+# what `all` runs, in order. preprocess comes first so the process pool it
+# forks never shares an interpreter with an initialised CUDA context.
+stages: [preprocess, smoke, train, eval]

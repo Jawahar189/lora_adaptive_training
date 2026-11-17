@@ -1,0 +1,63 @@
+# prior_bev_l4, rebalanced: the feature term first, and for long enough to matter.
+#
+# WHY. At 18k steps of `prior_bev_l4` the regression term was 93% of the loss
+# (weight 50 x a ~2.1-patch Huber = 106, against feature's 5.4) and
+# `val/match/feature_margin_nats` had not left 1.4 since step 0, against a chance
+# of ln(1024) = 6.931. The InfoNCE term was never actually trained: the only
+# feature-only, post-warm-up window in that whole run was steps 500-1351, because
+# the 0.10 gate on a 13,506-step denominator landed at step 1351 and weight 50 was
+# full by 2026. Feature loss reached 4.39 at step 3000 *while contributing 5% of
+# the gradient*, then rose to 5-6.9 and never recovered; pck@2p plateaued at ~0.41
+# from step 9000. This is the failure README's curriculum section warns about.
+#
+# WHAT CHANGES, and nothing else:
+#   * regression 50 -> 2. The ONLY weight that moves. topology and geometry at 10
+#     were never mis-set -- their 1.9% and 0.9% shares were an artifact of
+#     regression's 106 sitting in the denominator. At regression 2 the shares are
+#     feature 46%, regression 36%, topology 10%, geometry 8%, with no change to
+#     either, which also keeps the comparison with the rt_w* runs intact.
+#   * the gates move out, so the feature-only phase is 15,000 steps, not 850.
+#   * max_epochs 1 -> 2, because one epoch is only 54,120 steps and this run is
+#     100,000.
+#   * monitor becomes pck@2p, because ~100 validations of a 20-capture pose
+#     metric select noise when you take the max over them.
+#
+# The learning rate deliberately does NOT move. AdamW's update is lr*m/sqrt(v),
+# invariant to a uniform rescale of the gradient, so a ~10x smaller loss is close
+# to a no-op for step size. What the old weights really did was let a +-5x
+# regression swing drive an erratically varying clip factor; under these weights
+# that swing is 2.7x. `train/optimizer/grad_norm` now logs the pre-clip norm so
+# this is measured rather than argued.
+extends: bevaligner/configs/prior_bev_l4.yaml
+run_name: prior_bev_l4_feat
+trainer:
+  # 100,000 steps. max_epochs MUST exceed 100000/54120 = 1.85, or the run stops
+  # after one epoch: 108,240 batches / accumulate_grad_batches 2 = 54,120 steps,
+  # and max_steps never binds. With both set, estimated_stepping_batches =
+  # min(54,120 x 2, 100,000) = 100,000 exactly, so every gate fraction below is
+  # an exact step count -- and, because max_steps lives here rather than on the
+  # command line, it stays one across restarts.
+  max_steps: 100000
+  max_epochs: 2
+  # 2,000 batches = 1,000 optimizer steps, so ~100 validations over the run,
+  # each carrying a 20-capture pose eval.
+  val_check_interval: 2000
+  # '' would select on val/pose/cameras_within_1.0m: 20 captures, so +-1 capture
+  # = 0.05 on a quantity reading ~0.12, maximised over ~56 reads. pck@2p is the
+  # same inlier rate RANSAC consumes, over ~800 realities.
+  monitor: val/match/pck_within_2_patches
+loss:
+  weights:
+    feature: 1.0
+    # Median regression over the quiet steps (9k, 12k, 18k) is 2.12 patch-units
+    # of Huber, so weight 2 puts it at 4.2 against feature's 5.4.
+    regression: 2.0
+    topology: 10.0
+    geometry: 10.0
+  gates:
+    feature: 0.0
+    regression: 0.15        # step 15,000 of 100,000
+    topology: 0.25          # step 25,000
+    geometry: 0.25          # step 25,000
+  # 0.05 x 100,000 = 5,000 steps to full weight, against 675 in the old run
+  gate_ramp: 0.05

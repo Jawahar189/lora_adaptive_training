@@ -1,0 +1,158 @@
+# Every training setting, in one place. A run's config names this file with
+# `extends:` and overrides only what makes it that run, so a diff between two
+# runs is the difference between them and nothing else.
+#
+# This is where a shared default changes. The dataclass defaults in
+# `bevaligner/config.py` are the floor under it, for a Config built in Python
+# rather than read from disk; `tests/bevaligner/test_config.py` checks that
+# this file still names every field and invents none.
+run_name: bevaligner
+# What actually regularises this model, in full: `model.lora_dropout`,
+# `optimizer.weight_decay` and `model.lora_rank`. Nothing else can -- the
+# backbone is frozen and the matcher has no parameters at all, only a cosine at
+# a fixed temperature and a parameter-free soft-argmax, so 2.65 M of 89 M train
+# and they are all LoRA weight matrices (no biases, no norms, so the decay
+# covers 100% of them correctly). Worth knowing before reaching for more of it:
+# the `uf_*` sweep found that REMOVING augmentation improved the fit by 0.22
+# nats with validation flat, and that raising lora_rank 16 -> 64 gave the best
+# validation loss of the five arms. This model underfits.
+model:
+  backbone_family: dinov3
+  pretrained_id: null
+  lora_rank: 16
+  lora_alpha: 16.0
+  # inert until the training-flag fix, so every uf_* and rt_* run carried 0.1
+  # and dropped nothing; their results stand. Now live, and off by default.
+  lora_dropout: 0.0
+  gradient_checkpointing: false
+  temperature: 0.07
+data:
+  csv_files:
+  - datasets/100_prod_current.csv
+  # the prior rows are the TARGET: every reality of every capture a current row
+  # names in `prior_capture_id` is merged into paper inches and matched against
+  prior_csv_files:
+  - datasets/100_prod_prior.csv
+  val_csv_files: null
+  cache_dir: cache/bevaligner
+  preprocess_workers: 8
+  num_val_structures: 10
+  split_seed: 0
+  resolutions:
+  - 512
+  - 768
+  - 1024
+  resolution_weights: null
+  batch_size: 4
+  batch_size_per_resolution: {}
+  eval_resolution: 1024
+  samples_per_epoch: 100000
+  queries_per_sample: 1024
+  # null walks realities, as every run before this did. A number turns on
+  # two-level sampling -- structure by survey count ** this, then survey, then
+  # reality -- which is what stops one 69-reality survey outvoting a sibling
+  # with 3. See DataConfig.structure_balance.
+  structure_balance: null
+  num_workers: 12
+  augment: true
+  cloud_stride: 1
+  min_source_frames: 2
+  max_gt_fit_residual_m: 0.5
+  # boxes meeting is the cheap pre-filter; this is the criterion -- the share of
+  # the walk's wall the prior also has. See prior_bev.band_occupancy.
+  min_occupancy: 0.2
+  camera_window_overlap_bias: 0.8
+  prior_pool_cache: 24
+  prior_mosaic: false
+  prior_mosaic_cell_m: 5.0
+  random_crop_scale:
+  - 0.7
+  - 1.0
+  # 0 = today's behaviour, quarter turns only, so the relative yaw the matcher
+  # sees is the true yaw plus 90k. 45 on either side fills the 90 degrees
+  # between the cardinals and makes it uniform on the circle; 20 leaves holes.
+  density_rotation_degrees: 0.0
+  target_rotation_degrees: 0.0
+  zoom_crops: true
+  zoom_footprint_margin: 1.3
+  min_footprint_patches: 4.0
+  refine_on_footprint: true
+  refine_footprint_margin: 1.6
+  density_gammas:
+  - 0.25
+  - 0.5
+  - 0.75
+  - 1.0
+  density_min_counts:
+  - 1
+  - 1
+  - 2
+  band_low_range:
+  - -0.95
+  - -0.75
+  band_high_range:
+  - 0.15
+  - 0.35
+  # the prior's own point dropout, mirroring point_keep_fraction. Off: the
+  # prior has never been thinned, though it is as partial a capture as the
+  # current one.
+  target_point_keep_fraction:
+  - 1.0
+  - 1.0
+  camera_window_probability: 0.5
+  camera_window_min_fraction: 0.4
+  point_keep_fraction:
+  - 0.6
+  - 1.0
+  density_jitter: 0.2
+loss:
+  huber_delta: 1.0
+  num_triplets: 2048
+  num_pairs: 2048
+  # the weighted terms are sum(c*e)/sum(c), so an attached confidence pays the
+  # model to flatten the softmax of every above-average-error query -- and a
+  # flat softmax is exactly the collapse, since the prediction is its mean and
+  # the confidence its peak. Detached, confidence still downweights, but only
+  # the predictions carry gradient.
+  detach_confidence: true
+  near_duplicate_radius: 1.0
+  weights:
+    feature: 1.0
+    regression: 50.0
+    topology: 10.0
+    geometry: 10.0
+  gates:
+    feature: 0.0
+    regression: 0.1
+    topology: 0.2
+    geometry: 0.2
+  # a term reaches full weight this far after its gate, rather than at a step:
+  # weight 50 arriving whole on features that are not ready buries the InfoNCE
+  # gradient that has to make them ready
+  gate_ramp: 0.05
+optimizer:
+  learning_rate: 0.0001
+  weight_decay: 0.01
+  warmup_steps: 500
+  final_lr_fraction: 0.1
+  gradient_clip_norm: 1.0
+  accumulate_grad_batches: 1
+trainer:
+  precision: bf16-mixed
+  max_epochs: 1
+  # -1 = run to max_epochs. A run whose loss gates mean particular STEPS must
+  # set this, because the gates are fractions of it.
+  max_steps: -1
+  val_check_interval: 2000
+  val_pose_eval_captures: 20
+  val_batches: 20
+  # '' = val/pose/cameras_within_1.0m, or val/match/pck_within_2_patches under
+  # --no-pose-eval. See TrainerConfig.monitor for why pck is the better choice.
+  monitor: ''
+  save_top_k: 2
+  log_every_n_steps: 20
+  num_match_images: 4
+  match_correct_within_patches: 2.0
+  out_dir: out/bevaligner
+  seed: 0
+  deterministic: false

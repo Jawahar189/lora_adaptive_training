@@ -1,0 +1,585 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__</title>
+<style>
+  :root {
+    --bg: #f7f7f8;
+    --panel: #ffffff;
+    --border: #e2e2e6;
+    --text: #1c1c1f;
+    --text-dim: #6b6b74;
+    --accent: #3b5bdb;
+    --accent-soft: #e8ecfd;
+    --ok: #1d8a4c;
+    --ok-bg: #e6f6ec;
+    --bad: #c0392b;
+    --bad-bg: #fbeae8;
+    --warn: #b8860b;
+    --warn-bg: #fbf3d9;
+    --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  }
+  header {
+    padding: 16px 20px 14px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    z-index: 30;
+  }
+  header h1 { margin: 0 0 2px; font-size: 17px; font-weight: 650; }
+  header .sub { color: var(--text-dim); font-size: 12.5px; }
+  .stats { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+  .stat {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 6px 12px;
+    min-width: 84px;
+  }
+  .stat .n { font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .stat .l { font-size: 10.5px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .03em; }
+
+  .filters {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    margin-top: 12px;
+  }
+  .msf { position: relative; }
+  .msf-btn {
+    font: inherit;
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--panel);
+    color: var(--text);
+    cursor: pointer;
+    white-space: nowrap;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .msf-btn:hover { border-color: var(--accent); }
+  .msf-btn .cnt {
+    background: var(--accent-soft);
+    color: var(--accent);
+    border-radius: 20px;
+    padding: 0 7px;
+    font-size: 11px;
+    font-weight: 700;
+  }
+  .msf-btn.active .cnt { background: var(--accent); color: #fff; }
+  .msf-btn .caret { color: var(--text-dim); font-size: 10px; }
+  .msf-panel {
+    display: none;
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.12);
+    min-width: 220px;
+    max-width: 320px;
+    z-index: 40;
+    padding: 4px 0;
+  }
+  .msf.open .msf-panel { display: block; }
+  .msf-panel .opt-list { max-height: 320px; overflow-y: auto; padding: 4px 0; }
+  .msf-panel label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 12px;
+    cursor: pointer;
+    font-size: 12.5px;
+  }
+  .msf-panel label:hover { background: var(--row-hover, #f0f2fb); }
+  .msf-panel label.all-row {
+    font-weight: 650;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 2px;
+    padding-bottom: 7px;
+  }
+  .msf-panel label span.lbl { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .msf-panel input[type=checkbox] { accent-color: var(--accent); }
+  .reset-btn {
+    font: inherit;
+    padding: 6px 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--panel);
+    color: var(--text-dim);
+    cursor: pointer;
+  }
+  .reset-btn:hover { color: var(--bad); border-color: var(--bad); }
+
+  .sortbar {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-top: 10px;
+  }
+  select#sort-key {
+    font: inherit;
+    padding: 5px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--panel);
+  }
+  .dir-btn {
+    font: inherit;
+    padding: 5px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--panel);
+    cursor: pointer;
+  }
+  .count-badge { color: var(--text-dim); font-size: 12px; margin-left: auto; }
+
+  main { padding: 18px 20px 60px; max-width: 1400px; margin: 0 auto; }
+  .cards { display: flex; flex-direction: column; gap: 16px; }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+  }
+  .card-head {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 8px;
+  }
+  .card-head h3 { margin: 0; font-family: var(--mono); font-size: 14px; }
+  .card-head .ids { color: var(--text-dim); font-size: 11.5px; font-family: var(--mono); }
+  .pill {
+    display: inline-block;
+    padding: 1px 8px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .pill.ok { background: var(--ok-bg); color: var(--ok); }
+  .pill.bad { background: var(--bad-bg); color: var(--bad); }
+  .pill.warn { background: var(--warn-bg); color: var(--warn); }
+  .pill.na { background: var(--border); color: var(--text-dim); }
+
+  .metric-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 10px;
+  }
+  .chip {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 3px 9px;
+    font-size: 11.5px;
+    font-variant-numeric: tabular-nums;
+  }
+  .chip .l { color: var(--text-dim); margin-right: 4px; }
+  .chip.num-bad { border-color: #eab8b0; background: var(--bad-bg); color: var(--bad); }
+  .chip.num-warn { border-color: #ecd98a; background: var(--warn-bg); color: var(--warn); }
+
+  .warnings-box {
+    background: var(--warn-bg);
+    border: 1px solid #e9d488;
+    color: #6b5410;
+    border-radius: 8px;
+    padding: 6px 12px;
+    font-size: 12px;
+    margin-bottom: 10px;
+  }
+  .gallery {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 10px;
+  }
+  .gallery figure {
+    margin: 0;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .gallery img {
+    display: block;
+    width: 100%;
+    height: auto;
+    cursor: zoom-in;
+  }
+  .gallery figcaption {
+    padding: 4px 8px;
+    font-size: 10.5px;
+    color: var(--text-dim);
+    border-top: 1px solid var(--border);
+  }
+  .no-viz {
+    color: var(--text-dim);
+    background: var(--bg);
+    border: 1px dashed var(--border);
+    border-radius: 8px;
+    padding: 12px;
+    text-align: center;
+    font-size: 12.5px;
+  }
+  .lightbox {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,.85);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    cursor: zoom-out;
+    padding: 24px;
+  }
+  .lightbox.open { display: flex; }
+  .lightbox img { max-width: 100%; max-height: 100%; border-radius: 6px; }
+  .empty-state {
+    text-align: center;
+    color: var(--text-dim);
+    padding: 60px 20px;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>__TITLE__</h1>
+  <div class="sub">__SUBTITLE__</div>
+  <div class="stats" id="stats"></div>
+  <div class="filters" id="filters"></div>
+  <div class="sortbar">
+    <label style="font-size:12px; color:var(--text-dim);">Sort by</label>
+    <select id="sort-key"></select>
+    <button class="dir-btn" id="sort-dir">▲ asc</button>
+    <span class="count-badge" id="count-badge"></span>
+  </div>
+</header>
+
+<main>
+  <div class="cards" id="cards"></div>
+</main>
+
+<div class="lightbox" id="lightbox"><img id="lightbox-img" src=""></div>
+
+<script>
+const RESULTS = __RESULTS_JSON__;
+const VIZ_BASE = __VIZ_BASE_JSON__;
+
+// --- derive synthetic categorical fields used only for filtering ---
+RESULTS.forEach(d => {
+  d._top1 = d.top1_correct === true ? 'correct' : d.top1_correct === false ? 'incorrect' : 'n/a';
+  d._sign = (d.sign_ambiguous && d.sign_uncertain) ? 'ambiguous+uncertain'
+          : d.sign_ambiguous ? 'ambiguous'
+          : d.sign_uncertain ? 'uncertain'
+          : 'none';
+  d._viz = d.has_viz ? 'yes' : 'no';
+});
+
+const FILTER_DEFS = [
+  {key: '_status',   field: 'status',        label: 'Status'},
+  {key: '_top1',     field: '_top1',         label: 'Top-1'},
+  {key: '_sign',     field: '_sign',         label: 'Sign issue'},
+  {key: '_viz',      field: '_viz',          label: 'Has viz'},
+  {key: '_structure',field: 'structure',     label: 'Structure'},
+  {key: '_capture',  field: 'capture_id',    label: 'Capture ID'},
+  {key: '_reality',  field: 'reality_id',    label: 'Reality ID'},
+];
+
+const SORT_FIELDS = [
+  ['pose_error_m', 'Pose error (m)'],
+  ['yaw_error_deg', 'Yaw error (°)'],
+  ['scale_ratio', 'Scale ratio'],
+  ['score', 'Score'],
+  ['n_images', '# images'],
+  ['overlap_5m', 'Overlap'],
+  ['seconds', 'Seconds'],
+  ['reality_id', 'Reality ID'],
+  ['capture_date', 'Capture date'],
+];
+
+let filterState = {};   // key -> Set of selected values
+let filterOptions = {}; // key -> sorted array of all distinct values
+let sortKey = 'pose_error_m';
+let sortDir = 1;
+
+function initFilterState() {
+  FILTER_DEFS.forEach(fd => {
+    const vals = [...new Set(RESULTS.map(d => d[fd.field]))].sort();
+    filterOptions[fd.key] = vals;
+    filterState[fd.key] = new Set(vals); // all selected by default
+  });
+}
+
+function fmtNum(v, decimals) {
+  if (v === null || v === undefined || Number.isNaN(v)) return '—';
+  return Number(v).toFixed(decimals);
+}
+
+function median(arr) {
+  const s = [...arr].sort((a, b) => a - b);
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+}
+
+function renderStats() {
+  const total = RESULTS.length;
+  const ok = RESULTS.filter(d => d.status === 'ok').length;
+  const correct = RESULTS.filter(d => d.top1_correct === true).length;
+  const incorrect = RESULTS.filter(d => d.top1_correct === false).length;
+  const withViz = RESULTS.filter(d => d.has_viz).length;
+  const poseErrs = RESULTS.filter(d => typeof d.pose_error_m === 'number').map(d => d.pose_error_m);
+  const medPose = poseErrs.length ? median(poseErrs) : null;
+  const stats = [
+    ['Total', total], ['Ok', ok], ['Top-1 ✓', correct], ['Top-1 ✗', incorrect],
+    ['With viz', withViz], ['Median pose err', medPose !== null ? medPose.toFixed(2) + 'm' : '—'],
+  ];
+  document.getElementById('stats').innerHTML = stats.map(([l, n]) =>
+    `<div class="stat"><div class="n">${n}</div><div class="l">${l}</div></div>`
+  ).join('');
+}
+
+function renderFilters() {
+  const wrap = document.getElementById('filters');
+  wrap.innerHTML = FILTER_DEFS.map(fd => {
+    const opts = filterOptions[fd.key];
+    return `
+      <div class="msf" data-key="${fd.key}">
+        <button class="msf-btn" type="button">
+          ${fd.label} <span class="cnt"></span> <span class="caret">▾</span>
+        </button>
+        <div class="msf-panel">
+          <div class="opt-list">
+            <label class="all-row">
+              <input type="checkbox" data-all>
+              <span class="lbl">All (${opts.length})</span>
+            </label>
+            ${opts.map(v => `
+              <label>
+                <input type="checkbox" value="${escapeAttr(v)}">
+                <span class="lbl">${escapeHtml(String(v))}</span>
+              </label>
+            `).join('')}
+          </div>
+        </div>
+      </div>
+    `;
+  }).join('') + `<button class="reset-btn" id="reset-filters" type="button">Reset all filters</button>`;
+
+  FILTER_DEFS.forEach(fd => {
+    const root = wrap.querySelector(`.msf[data-key="${fd.key}"]`);
+    const btn = root.querySelector('.msf-btn');
+    const allCb = root.querySelector('input[data-all]');
+    const valCbs = [...root.querySelectorAll('input[type=checkbox]:not([data-all])')];
+
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const wasOpen = root.classList.contains('open');
+      document.querySelectorAll('.msf.open').forEach(el => el.classList.remove('open'));
+      if (!wasOpen) root.classList.add('open');
+    });
+
+    allCb.addEventListener('change', () => {
+      if (allCb.checked) {
+        filterState[fd.key] = new Set(filterOptions[fd.key]);
+      } else {
+        filterState[fd.key] = new Set();
+      }
+      valCbs.forEach(cb => cb.checked = allCb.checked);
+      updateFilterBtnLabel(fd);
+      renderCards();
+    });
+
+    valCbs.forEach(cb => {
+      cb.addEventListener('change', () => {
+        if (cb.checked) filterState[fd.key].add(cb.value);
+        else filterState[fd.key].delete(cb.value);
+        const allSelected = filterState[fd.key].size === filterOptions[fd.key].length;
+        allCb.checked = allSelected;
+        allCb.indeterminate = !allSelected && filterState[fd.key].size > 0;
+        updateFilterBtnLabel(fd);
+        renderCards();
+      });
+    });
+
+    syncPanelChecks(fd, root);
+    updateFilterBtnLabel(fd);
+  });
+
+  document.getElementById('reset-filters').addEventListener('click', () => {
+    initFilterState();
+    renderFilters();
+    renderCards();
+  });
+}
+
+function syncPanelChecks(fd, root) {
+  const selected = filterState[fd.key];
+  const allOpts = filterOptions[fd.key];
+  const allCb = root.querySelector('input[data-all]');
+  const valCbs = [...root.querySelectorAll('input[type=checkbox]:not([data-all])')];
+  valCbs.forEach(cb => cb.checked = selected.has(cb.value));
+  allCb.checked = selected.size === allOpts.length;
+  allCb.indeterminate = selected.size > 0 && selected.size < allOpts.length;
+}
+
+function updateFilterBtnLabel(fd) {
+  const root = document.querySelector(`.msf[data-key="${fd.key}"]`);
+  const btn = root.querySelector('.msf-btn');
+  const cnt = btn.querySelector('.cnt');
+  const total = filterOptions[fd.key].length;
+  const n = filterState[fd.key].size;
+  cnt.textContent = n === total ? 'All' : `${n}/${total}`;
+  btn.classList.toggle('active', n !== total);
+}
+
+document.addEventListener('click', () => {
+  document.querySelectorAll('.msf.open').forEach(el => el.classList.remove('open'));
+});
+
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function escapeAttr(s) { return escapeHtml(String(s)); }
+
+function renderSortOptions() {
+  const sel = document.getElementById('sort-key');
+  sel.innerHTML = SORT_FIELDS.map(([k, l]) => `<option value="${k}">${l}</option>`).join('');
+  sel.value = sortKey;
+  sel.addEventListener('change', () => { sortKey = sel.value; renderCards(); });
+  const dirBtn = document.getElementById('sort-dir');
+  dirBtn.addEventListener('click', () => {
+    sortDir *= -1;
+    dirBtn.textContent = sortDir === 1 ? '▲ asc' : '▼ desc';
+    renderCards();
+  });
+}
+
+function filteredSorted() {
+  let rows = RESULTS.filter(d =>
+    FILTER_DEFS.every(fd => filterState[fd.key].has(d[fd.field]))
+  );
+  rows.sort((a, b) => {
+    let av = a[sortKey], bv = b[sortKey];
+    if (av === null || av === undefined) av = sortDir === 1 ? Infinity : -Infinity;
+    if (bv === null || bv === undefined) bv = sortDir === 1 ? Infinity : -Infinity;
+    if (typeof av === 'string') return sortDir * av.localeCompare(bv);
+    return sortDir * (av - bv);
+  });
+  return rows;
+}
+
+const IMAGE_SPECS = [
+  ['R0_ground_truth.png', 'Ground truth'],
+  ['R1_reference.png', 'Reference cloud'],
+  ['R2_placement.png', 'Placement'],
+  ['R3_alternatives.png', 'Alternative hypotheses'],
+  ['run.png', 'Run summary'],
+];
+
+function chip(label, value, cls) {
+  return `<span class="chip ${cls || ''}"><span class="l">${label}</span>${value}</span>`;
+}
+
+function numChipClass(v, warnAt, badAt) {
+  if (v === null || v === undefined || Number.isNaN(v)) return '';
+  if (badAt !== undefined && Math.abs(v) >= badAt) return 'num-bad';
+  if (warnAt !== undefined && Math.abs(v) >= warnAt) return 'num-warn';
+  return '';
+}
+
+function renderCard(d) {
+  const statusPill = d.status === 'ok' ? 'ok' : 'warn';
+  const top1Pill = d.top1_correct === true ? '<span class="pill ok">top-1 ✓</span>'
+                 : d.top1_correct === false ? '<span class="pill bad">top-1 ✗</span>'
+                 : '<span class="pill na">top-1 —</span>';
+
+  const metrics = `
+    <div class="metric-row">
+      ${chip('pose_err', fmtNum(d.pose_error_m, 2) + 'm', numChipClass(d.pose_error_m, 1.0, 2.0))}
+      ${chip('yaw_err', fmtNum(d.yaw_error_deg, 1) + '°', numChipClass(d.yaw_error_deg, 5, 30))}
+      ${chip('scale_ratio', fmtNum(d.scale_ratio, 3))}
+      ${chip('score', fmtNum(d.score, 2))}
+      ${chip('rmse_xy', fmtNum(d.rmse_xy, 2) + 'm')}
+      ${chip('tpr@1.0', d['tpr@1.0'] === null || d['tpr@1.0'] === undefined ? '—' : (d['tpr@1.0']*100).toFixed(0)+'%')}
+      ${chip('n_img', d.n_images ?? '—')}
+      ${chip('overlap', fmtNum(d.overlap_5m, 2))}
+      ${chip('sec', fmtNum(d.seconds, 1))}
+      ${chip('capture', d.capture_date ?? '—')}
+    </div>
+  `;
+
+  const warningsHtml = (d.warnings && d.warnings.length)
+    ? `<div class="warnings-box"><strong>Warnings:</strong> ${escapeHtml(d.warnings.join(' · '))}</div>`
+    : '';
+
+  let galleryHtml;
+  if (d.has_viz) {
+    galleryHtml = `<div class="gallery">` + IMAGE_SPECS.map(([file, caption]) => {
+      const src = `${VIZ_BASE}/${d.reality_id}/${file}`;
+      return `<figure><img src="${src}" loading="lazy" alt="${caption}" onclick="openLightbox('${src}')"><figcaption>${caption}</figcaption></figure>`;
+    }).join('') + `</div>`;
+  } else {
+    galleryHtml = `<div class="no-viz">No visualization available for this result (status: ${escapeHtml(d.status)}).</div>`;
+  }
+
+  return `
+    <div class="card">
+      <div class="card-head">
+        <h3>${d.reality_id}</h3>
+        <span class="pill ${statusPill}">${d.status}</span>
+        ${top1Pill}
+        <span class="ids">capture ${d.capture_id} · structure ${d.structure}</span>
+      </div>
+      ${metrics}
+      ${warningsHtml}
+      ${galleryHtml}
+    </div>
+  `;
+}
+
+function renderCards() {
+  const rows = filteredSorted();
+  document.getElementById('count-badge').textContent = `${rows.length} / ${RESULTS.length} shown`;
+  const el = document.getElementById('cards');
+  if (!rows.length) {
+    el.innerHTML = `<div class="empty-state">No results match the current filters.</div>`;
+    return;
+  }
+  el.innerHTML = rows.map(renderCard).join('');
+}
+
+function openLightbox(src) {
+  document.getElementById('lightbox-img').src = src;
+  document.getElementById('lightbox').classList.add('open');
+}
+document.getElementById('lightbox').addEventListener('click', () => {
+  document.getElementById('lightbox').classList.remove('open');
+});
+
+function init() {
+  initFilterState();
+  renderStats();
+  renderFilters();
+  renderSortOptions();
+  renderCards();
+}
+init();
+</script>
+</body>
+</html>

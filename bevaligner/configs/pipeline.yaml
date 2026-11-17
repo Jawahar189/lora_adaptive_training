@@ -1,0 +1,3 @@
+# The stratified run on a 24 GB card.
+extends: bevaligner/configs/pipeline_defaults.yaml
+run_name: gpu24_stratified

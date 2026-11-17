@@ -1,0 +1,771 @@
+{
+  // BEVAligner on the prior-capture branch (README.md, docs/PRIOR_CAPTURE.md):
+  // the learned match between a capture's density map and the BEV of the
+  // capture that came before it. The drawing is not read at all.
+  //
+  // The entries numbered 1-5 ARE the README's "The whole thing, in order" --
+  // the five commands a full run is made of, in that order, with the lettered
+  // variants of each beneath it. Everything runs from .venv-a100 (this box has
+  // no .venv: the repo sits on a shared disk and the T4 box's Python 3.10 is
+  // not installed here).
+  //
+  // The dataset is a PAIR of CSVs: the current side is one training sample per
+  // row, the prior side is what those rows are matched against. The cache under
+  // cache/bevaligner/ is a memo the DataModule fills on demand.
+  "version": "0.2.0",
+  "inputs": [
+    {
+      "id": "saConfig",
+      "type": "pickString",
+      "description": "Training preset",
+      "options": [
+        "bevaligner/configs/prior_bev_l4_feat.yaml",
+        "bevaligner/configs/prior_bev_l4.yaml",
+        "bevaligner/configs/prior_bev.yaml",
+        "bevaligner/configs/a100_dinov3.yaml",
+        "bevaligner/configs/a100.yaml",
+        "bevaligner/configs/gpu24.yaml",
+        "bevaligner/configs/gpu48.yaml",
+        "bevaligner/configs/t4_smoke_dinov3.yaml",
+        "bevaligner/configs/t4_smoke.yaml"
+      ],
+      "default": "bevaligner/configs/prior_bev_l4_feat.yaml"
+    },
+    {
+      // Every entry that reads a dataset names BOTH sides explicitly, so no run
+      // falls back to whatever csv_files a preset or a checkpoint happens to
+      // carry. Full paths: these are passed straight through to argparse or to
+      // a data.*_csv_files override, and REPO_ROOT / "/abs/path" is the abs path.
+      "id": "saCurrentCsv",
+      "type": "promptString",
+      "description": "CURRENT-side CSV, full path: one training sample per row",
+      "default": "/mnt/align-data/src/align_floorplan_gdp/datasets/splits/prior_bev_train.csv"
+    },
+    {
+      // data.val_csv_files. Set, the val structures come from THIS file; unset,
+      // the DataModule cuts a random structure split out of the current CSV
+      // instead (datamodule.py:88). The split CSVs are disjoint by structure --
+      // 448 train, 90 val, 60 test -- so naming it is what keeps them disjoint.
+      "id": "saValCsv",
+      "type": "promptString",
+      "description": "VAL-side CSV, full path: the structures validated on",
+      "default": "/mnt/align-data/src/align_floorplan_gdp/datasets/splits/prior_bev_val.csv"
+    },
+    {
+      "id": "saPriorCsv",
+      "type": "promptString",
+      "description": "PRIOR-side CSV, full path: the rows the samples are matched against",
+      "default": "/mnt/align-data/datasets/manifest_all_19_aug_23_sep_prior.csv"
+    },
+    {
+      // geo.txt is a per-image GNSS fix, present on about 85% of realities and
+      // read only where the structure is georeferenced: measured against ground
+      // truth it is median 2.8 paper inches there (p90 12.1) and an unrelated
+      // local frame everywhere else. It falls back to a search on its own, so
+      // `search` is for forcing the question rather than for rescuing it.
+      // `none` chains from whichever split passes the gate first.
+      "id": "saChainSeed",
+      "type": "pickString",
+      "description": "Where each capture's FIRST pose comes from",
+      "options": [
+        "geo",
+        "search",
+        "none"
+      ],
+      "default": "geo"
+    },
+    {
+      "id": "saCkpt",
+      "type": "promptString",
+      "description": "Checkpoint (LoRA weights + the config it was trained with)",
+      "default": "out/bevaligner/prior_bev_l4_feat/checkpoints/best-step=62120.ckpt"
+    },
+    {
+      // The CSV selects the split, not --split: --split reads the cache's
+      // splits.json, which knows only train and val, and intersecting it with a
+      // split CSV empties a test run without saying so. bevaligner/
+      // pipeline.py:184 makes the same choice for the same reason.
+      "id": "saEvalCsv",
+      "type": "promptString",
+      "description": "CURRENT-side CSV to place, full path",
+      "default": "/mnt/align-data/src/align_floorplan_gdp/datasets/splits/prior_bev_val.csv"
+    },
+    {
+      // Names the output only. Keep it in step with the CSV above -- nothing
+      // checks that they agree, and <stem>.csv is overwritten in place.
+      "id": "saEvalName",
+      "type": "promptString",
+      "description": "Name this evaluation: writes out/bevaligner/eval/<name>.{csv,jsonl}",
+      "default": "prior_bev_val"
+    },
+    {
+      "id": "saQualitative",
+      "type": "promptString",
+      "description": "Draw matches.png + placement.png for how many captures? (0 = none)",
+      "default": "20"
+    },
+    {
+      "id": "saLimit",
+      "type": "promptString",
+      "description": "How many captures to place",
+      "default": "5"
+    },
+    {
+      // Where the DINO weights are read from. The checkpoint already names its
+      // own path and that is the default, so this only matters when the
+      // adapter came from somewhere else -- an S3 copy, say -- and the weights
+      // do not sit where it was trained.
+      "id": "saBackbone",
+      "type": "promptString",
+      "description": "DINOv3 weights for the frozen backbone",
+      "default": "cache/dinov3/vitb16_lvd1689m"
+    },
+    {
+      // Pins every photograph's z, as the viewer's own file does. Measured
+      // across 307 prior splits of 100_prod, camera_paper_z_median is 0.00
+      // (p10 -0.00, p90 0.01), so 0 is the prior's own plane almost everywhere.
+      // Delete the --images-z pair from the args to keep each image's SOLVED z
+      // instead, which carries more information.
+      "id": "saImagesZ",
+      "type": "promptString",
+      "description": "Pin every image z to this (prior median; 0 for the prior plane)",
+      "default": "0"
+    },
+    {
+      "id": "realityId",
+      "type": "promptString",
+      "description": "Reality id",
+      "default": "RLT1789534410296"
+    },
+    {
+      "id": "saPipelineStage",
+      "type": "pickString",
+      "description": "Pipeline stage (floor-plan era wrapper)",
+      "options": [
+        "all",
+        "splits",
+        "preprocess",
+        "smoke",
+        "train",
+        "resume",
+        "eval"
+      ],
+      "default": "all"
+    },
+    {
+      "id": "saPipelineConfig",
+      "type": "pickString",
+      "description": "Pipeline preset (floor-plan era wrapper)",
+      "options": [
+        "bevaligner/configs/pipeline_a100_dinov3.yaml",
+        "bevaligner/configs/pipeline_a100.yaml",
+        "bevaligner/configs/pipeline_gpu48.yaml",
+        "bevaligner/configs/pipeline_t4.yaml",
+        "bevaligner/configs/pipeline.yaml"
+      ],
+      "default": "bevaligner/configs/pipeline_a100_dinov3.yaml"
+    }
+  ],
+  "configurations": [
+    {
+      // README step 1. Every row of the current CSV, and each survivor's prior
+      // pool prepared whole alongside it: 13,485 + 9,784 = 23,269 realities,
+      // six to nine hours on eight cores and about 13 GB. Resumable -- a rerun
+      // skips whatever is already on disk -- so killing it costs only the
+      // capture in flight. Optional: the DataModule fills what is missing
+      // before training starts. Run it ahead of time to read
+      // cache/bevaligner/manifest.csv and see the failures before the GPU.
+      // From a terminal you would put nohup in front of this and tail the log.
+      "name": "BEVAligner 1: fill the cache (current rows + their prior pools)",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/.venv-a100/bin/python",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "module": "bevaligner.data.preprocess",
+      "args": [
+        "--csv",
+        "${input:saCurrentCsv}",
+        "--prior-csv",
+        "${input:saPriorCsv}",
+        "--workers",
+        "8"
+      ]
+    },
+    {
+      // Four rows into a throwaway cache: proves the join, the pool and the
+      // overlap gate in about a minute. This is the cache the overfit sanity
+      // run (3c) and the dataset tests read.
+      "name": "BEVAligner 1b: fill a four-row smoke cache (a minute)",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/.venv-a100/bin/python",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "module": "bevaligner.data.preprocess",
+      "args": [
+        "--csv",
+        "${input:saCurrentCsv}",
+        "--prior-csv",
+        "${input:saPriorCsv}",
+        "--realities",
+        "RLT1789534410296",
+        "RLT1790025713908",
+        "RLT1789492971045",
+        "RLT1788456493605",
+        "--cache-dir",
+        "cache/bevaligner_smoke",
+        "--workers",
+        "8"
+      ]
+    },
+    {
+      // README step 2, first half. The pairs from the truth alone: whole prior,
+      // the window, the query, and the two overlaid. Read the fourth panel --
+      // yellow on yellow is a pair the matcher can learn from, red beside green
+      // is a walk and a prior in different parts of the site. --cross-check
+      // also measures the cached gt_sim2 against the guarded tm.json read in
+      // align/priors.py, which is the assumption the whole target rests on.
+      // No model, no GPU: safe to run beside a training job.
+      "name": "BEVAligner 2: look at the pairs before training on them",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/.venv-a100/bin/python",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "program": "${workspaceFolder}/scripts/probe_prior_pairs.py",
+      "args": [
+        "--config",
+        "${input:saConfig}",
+        "--limit",
+        "24",
+        "--cross-check",
+        "--out",
+        "out/prior_pairs"
+      ]
+    },
+    {
+      // README step 2, second half: what the loader actually hands the network,
+      // with the numbers that decide whether a sample CAN be learned.
+      "name": "BEVAligner 2b: what the loader hands the network",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/.venv-a100/bin/python",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "program": "${workspaceFolder}/scripts/viz_training_inputs.py",
+      "args": [
+        "--config",
+        "${input:saConfig}",
+        "--num",
+        "24",
+        "--out-dir",
+        "out/training_inputs",
+        "data.csv_files=[${input:saCurrentCsv}]",
+        "data.val_csv_files=[${input:saValCsv}]",
+        "data.prior_csv_files=[${input:saPriorCsv}]"
+      ]
+    },
+    {
+      // The same over 2000 samples with no pictures: the distributions, not the
+      // examples.
+      "name": "BEVAligner 2c: loader statistics over 2000 samples (no pictures)",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/.venv-a100/bin/python",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "program": "${workspaceFolder}/scripts/viz_training_inputs.py",
+      "args": [
+        "--config",
+        "${input:saConfig}",
+        "--stats-only",
+        "--num",
+        "2000",
+        "data.csv_files=[${input:saCurrentCsv}]",
+        "data.val_csv_files=[${input:saValCsv}]",
+        "data.prior_csv_files=[${input:saPriorCsv}]"
+      ]
+    },
+    {
+      // README step 3. Step 0 is not immediate: the first step re-runs
+      // ensure_prepared over every row, and the pairing pass reads ~55k small
+      // .npz files to compute each row's overlap, so expect a few minutes.
+      // Checkpoints are selected on val/tpr@1.0_mean, not on the loss.
+      "name": "BEVAligner 3: train (pick preset)",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/.venv-a100/bin/python",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "module": "bevaligner.train",
+      "env": {
+        "HF_HOME": "${workspaceFolder}/cache/hf"
+      },
+      "args": [
+        "--config",
+        "${input:saConfig}",
+        "--save-pair-images",
+        "2",
+        "data.csv_files=[${input:saCurrentCsv}]",
+        "data.val_csv_files=[${input:saValCsv}]",
+        "data.prior_csv_files=[${input:saPriorCsv}]"
+      ]
+    },
+    {
+      // Continue an interrupted run from its last checkpoint.
+      "name": "BEVAligner 3b: train, resume from a checkpoint",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/.venv-a100/bin/python",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "module": "bevaligner.train",
+      "env": {
+        "HF_HOME": "${workspaceFolder}/cache/hf"
+      },
+      "args": [
+        "--config",
+        "${input:saConfig}",
+        "--resume",
+        "${input:saCkpt}",
+        "data.csv_files=[${input:saCurrentCsv}]",
+        "data.val_csv_files=[${input:saValCsv}]",
+        "data.prior_csv_files=[${input:saPriorCsv}]"
+      ]
+    },
+    {
+      // Sanity before the real run: two captures, no augmentation, against the
+      // throwaway cache from 1b. pck@2patches must head towards 1 within ~200
+      // steps -- it took 30 s and reached 0.83 on an L4. Two captures memorised
+      // is not accuracy, it is the wiring test for the
+      // density px -> cloud xy -> paper inches -> crop px chain.
+      "name": "BEVAligner 3c: overfit two captures (the sanity run)",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/.venv-a100/bin/python",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "module": "bevaligner.train",
+      "env": {
+        "HF_HOME": "${workspaceFolder}/cache/hf"
+      },
+      "args": [
+        "--config",
+        "${input:saConfig}",
+        "--overfit-realities",
+        "RLT1789534410296",
+        "RLT1790025713908",
+        "--no-augment",
+        "--save-pair-images",
+        "1",
+        "--max-steps",
+        "200",
+        "run_name=overfit2",
+        "data.csv_files=[${input:saCurrentCsv}]",
+        "data.val_csv_files=[${input:saValCsv}]",
+        "data.prior_csv_files=[${input:saPriorCsv}]",
+        "data.cache_dir=cache/bevaligner_smoke",
+        "data.resolutions=[512]",
+        "data.resolution_weights=[1.0]",
+        "data.eval_resolution=512",
+        "data.batch_size=2",
+        "data.samples_per_epoch=400",
+        "trainer.val_check_interval=100"
+      ]
+    },
+    {
+      // Breakpoints in the dataset and the losses actually hit: no loader
+      // workers, five steps, no pose evaluation. Writes out/bevaligner/debug/.
+      "name": "BEVAligner 3d: train, steppable (no workers, 5 steps)",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/.venv-a100/bin/python",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "module": "bevaligner.train",
+      "env": {
+        "HF_HOME": "${workspaceFolder}/cache/hf"
+      },
+      "args": [
+        "--config",
+        "${input:saConfig}",
+        "--max-steps",
+        "5",
+        "--no-pose-eval",
+        "--save-pair-images",
+        "1",
+        "run_name=debug",
+        "data.csv_files=[${input:saCurrentCsv}]",
+        "data.val_csv_files=[${input:saValCsv}]",
+        "data.prior_csv_files=[${input:saPriorCsv}]",
+        "data.num_workers=0",
+        "data.resolutions=[512]",
+        "data.resolution_weights=[1.0]",
+        "data.batch_size=2",
+        "data.samples_per_epoch=16",
+        "optimizer.accumulate_grad_batches=1",
+        "trainer.val_check_interval=4",
+        "trainer.val_batches=1"
+      ]
+    },
+    {
+      // README step 4. The Images tab is the diagnostic: a mirror or a collapsed
+      // match field shows there and in no loss curve. Among the scalars, read
+      // the metres rather than the percentages of the prior diagonal, and watch
+      // pred_spread_patches and feature_margin -- they name a collapse while it
+      // is still happening.
+      "name": "BEVAligner 4: TensorBoard on out/bevaligner",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/.venv-a100/bin/python",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "module": "tensorboard.main",
+      "args": [
+        "--logdir",
+        "out/bevaligner",
+        "--port",
+        "6006",
+        "--bind_all"
+      ]
+    },
+    {
+      // README step 5. The live path: the CURRENT capture's cloud, cameras,
+      // gravity and both up hypotheses are computed here, so this works on
+      // captures the cache has never seen; the prior pool does come from the
+      // cache, because it is the target. Windows are tiled over the prior, the
+      // pose with the most RANSAC inliers wins, then the prior is re-rendered
+      // around it and re-fitted. Writes <stem>.csv, .jsonl and
+      // _predictions.jsonl through align.eval.reality.ResultWriter -- the same
+      // three files scripts/run_alignment.py writes.
+      "name": "BEVAligner 5: evaluate a split, with pictures (prompts)",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/.venv-a100/bin/python",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "module": "bevaligner.evaluate",
+      "env": {
+        "HF_HOME": "${workspaceFolder}/cache/hf"
+      },
+      "args": [
+        "--ckpt",
+        "${input:saCkpt}",
+        "--csv",
+        "${input:saEvalCsv}",
+        "--prior-csv",
+        "${input:saPriorCsv}",
+        "--qualitative",
+        "${input:saQualitative}",
+        "--stem",
+        "out/bevaligner/eval/${input:saEvalName}"
+      ]
+    },
+    {
+      // The deployable number. By default the target is the prior splits that
+      // overlap the walk, and selecting those needs the walk's true position --
+      // the thing being solved for -- so the default is an upper bound.
+      // --whole-prior takes every prepared split of the named prior captures,
+      // which is what production can actually assemble.
+      "name": "BEVAligner 5b: evaluate against the WHOLE prior (prompts)",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/.venv-a100/bin/python",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "module": "bevaligner.evaluate",
+      "env": {
+        "HF_HOME": "${workspaceFolder}/cache/hf"
+      },
+      "args": [
+        "--ckpt",
+        "${input:saCkpt}",
+        "--csv",
+        "${input:saEvalCsv}",
+        "--prior-csv",
+        "${input:saPriorCsv}",
+        "--whole-prior",
+        "--qualitative",
+        "${input:saQualitative}",
+        "--stem",
+        "out/bevaligner/eval/${input:saEvalName}_whole"
+      ]
+    },
+    {
+      // One capture, end to end, with both pictures. matches.png shows a
+      // collapsed match field as every line converging on one spot;
+      // placement.png shows a wrong placement as two walks in different rooms.
+      "name": "BEVAligner 5c: evaluate ONE reality (prompts)",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/.venv-a100/bin/python",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "module": "bevaligner.evaluate",
+      "env": {
+        "HF_HOME": "${workspaceFolder}/cache/hf"
+      },
+      "args": [
+        "--ckpt",
+        "${input:saCkpt}",
+        "--csv",
+        "${input:saEvalCsv}",
+        "--prior-csv",
+        "${input:saPriorCsv}",
+        "--realities",
+        "${input:realityId}",
+        "--stem",
+        "out/bevaligner/eval/one_${input:realityId}",
+        "--qualitative",
+        "1"
+      ]
+    },
+    {
+      // Capture-wise sequential placement. A capture is one walk cut into
+      // pieces, so once any piece is placed its neighbour's start is known to
+      // within inches -- against a search that otherwise tiles the whole prior
+      // into 32 windows, and translation is the dimension the matcher cannot
+      // resolve alone. Each split seeds the next; where the gate refuses a
+      // pose, the chain falls back to the unconstrained search this flow runs
+      // today and re-seeds from whatever passes next, so a split can do no
+      // worse than it would have unchained.
+      //
+      // Rows come out capture-major rather than in CSV order, and the CSV gains
+      // the chain_* and gate_* columns. Read the chain_how breakdown printed at
+      // the end before the headline: a gain that is all `seed` and no `chained`
+      // means the seeds landed on easy captures, not that the chain worked.
+      "name": "BEVAligner 5d: evaluate CHAINED, capture by capture (prompts)",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/.venv-a100/bin/python",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "module": "bevaligner.evaluate",
+      "env": {
+        "HF_HOME": "${workspaceFolder}/cache/hf"
+      },
+      "args": [
+        "--ckpt",
+        "${input:saCkpt}",
+        "--csv",
+        "${input:saEvalCsv}",
+        "--prior-csv",
+        "${input:saPriorCsv}",
+        "--whole-prior",
+        "--chain",
+        "--chain-seed",
+        "${input:saChainSeed}",
+        "--qualitative",
+        "${input:saQualitative}",
+        "--stem",
+        "out/bevaligner/eval/${input:saEvalName}_chain"
+      ]
+    },
+    {
+      // A CSV the run was not trained against. Start with a handful: each
+      // capture loads its own cloud and sweeps tiled windows against both
+      // gravity signs, so a full CSV runs for hours. Both sides must be given
+      // together -- the prior CSV is the target, not a detail.
+      "name": "BEVAligner 5e: evaluate N captures of another CSV pair (prompts)",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/.venv-a100/bin/python",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "module": "bevaligner.evaluate",
+      "env": {
+        "HF_HOME": "${workspaceFolder}/cache/hf"
+      },
+      "args": [
+        "--ckpt",
+        "${input:saCkpt}",
+        "--csv",
+        "${input:saCurrentCsv}",
+        "--prior-csv",
+        "${input:saPriorCsv}",
+        "--limit",
+        "${input:saLimit}",
+        "--stem",
+        "out/bevaligner/eval/sample",
+        "--qualitative",
+        "${input:saQualitative}"
+      ]
+    },
+    {
+      // Production's own output: one images.json per reality in the shape the
+      // floormap viewer consumes, plus floormap.png beside it. --no-score never
+      // opens ground truth, which is what makes it usable on a capture that has
+      // none.
+      "name": "BEVAligner 5f: write per-image poses for the viewer (prompts)",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/.venv-a100/bin/python",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "module": "bevaligner.evaluate",
+      "env": {
+        "HF_HOME": "${workspaceFolder}/cache/hf"
+      },
+      "args": [
+        "--ckpt",
+        "${input:saCkpt}",
+        "--csv",
+        "${input:saEvalCsv}",
+        "--prior-csv",
+        "${input:saPriorCsv}",
+        "--realities",
+        "${input:realityId}",
+        "--images",
+        "--images-plot",
+        "--no-score",
+        "--stem",
+        "out/bevaligner/eval/images_${input:realityId}"
+      ]
+    },
+    {
+      // The PRODUCTION path, on one reality, with the search geometry that
+      // measured best. infer never opens ground truth -- that is what lets it
+      // run on a capture that has none -- so there are no metrics here, only
+      // the transform and the per-image poses. Score afterwards with
+      // scripts/evaluate.py --pred <stem>_predictions.jsonl.
+      //
+      // No --whole-prior: infer ALWAYS targets every prepared split of the
+      // named prior captures. The flag exists on evaluate because there it is
+      // a choice, and the other option needs the answer to make it.
+      //
+      // --search-zoom-out 2 with --max-windows 128 is the setting that, over
+      // datasets/splits/prior_bev_test.csv, took the median error on realities
+      // the 32-window search also placed from 6.1 m to 1.4 m. It costs about
+      // 2.8x the wall time, which is why it is not the default.
+      "name": "BEVAligner 6: infer ONE reality, production path (prompts)",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/.venv-a100/bin/python",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "module": "bevaligner.infer",
+      "env": {
+        "HF_HOME": "${workspaceFolder}/cache/hf"
+      },
+      "args": [
+        "--ckpt",
+        "${input:saCkpt}",
+        "--backbone",
+        "${input:saBackbone}",
+        "--csv",
+        "${input:saEvalCsv}",
+        "--prior-csv",
+        "${input:saPriorCsv}",
+        "--realities",
+        "${input:realityId}",
+        "--matcher",
+        "keypoints",
+        "--queries",
+        "2048",
+        "--search-zoom-out",
+        "2",
+        "--max-windows",
+        "128",
+        "--images",
+        "--images-every-nth",
+        "1",
+        "--images-z",
+        "${input:saImagesZ}",
+        "--stem",
+        "out/bevaligner/infer/one_${input:realityId}"
+      ]
+    },
+    {
+      "name": "BEVAligner: tests",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/.venv-a100/bin/python",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "module": "pytest",
+      "args": [
+        "tests/bevaligner",
+        "-q"
+      ]
+    },
+    {
+      // The handful that need a real cache skip without one. Pointed at the
+      // four-row cache from 1b, they run.
+      "name": "BEVAligner: tests that read a cache (against the smoke cache)",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/.venv-a100/bin/python",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "module": "pytest",
+      "env": {
+        "BEVALIGNER_TEST_CACHE": "cache/bevaligner_smoke",
+        "BEVALIGNER_TEST_CSV": "/mnt/align-data/datasets/manifest_all_19_aug_23_sep_current.csv",
+        "BEVALIGNER_TEST_PRIOR_CSV": "/mnt/align-data/datasets/manifest_all_19_aug_23_sep_prior.csv"
+      },
+      "args": [
+        "tests/bevaligner/test_dataset.py",
+        "-q"
+      ]
+    },
+    {
+      "name": "BEVAligner: tests, current file",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/.venv-a100/bin/python",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "module": "pytest",
+      "args": [
+        "${file}",
+        "-q"
+      ]
+    },
+    {
+      // Floor-plan era. The pipeline presets concatenate the current and prior
+      // indexes into splits.source_csv, which on this branch double-counts -- a
+      // prior row is part of a target, not a training example -- and there is
+      // no pipeline_prior_bev.yaml. Kept because the older runs under
+      // out/bevaligner/ were made with it. --dry-run prints what each stage
+      // would call and does nothing, which is the cheapest way to see which
+      // CSVs, cache and checkpoint a preset resolves to.
+      "name": "BEVAligner: pipeline wrapper, floor-plan era (pick stage + preset)",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/.venv-a100/bin/python",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "module": "bevaligner.pipeline",
+      "env": {
+        "HF_HOME": "${workspaceFolder}/cache/hf"
+      },
+      "args": [
+        "${input:saPipelineStage}",
+        "--config",
+        "${input:saPipelineConfig}"
+      ]
+    }
+  ]
+}

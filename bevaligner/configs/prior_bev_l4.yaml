@@ -1,0 +1,25 @@
+# prior_bev on this machine: one L4 (23 GB) and 8 cores.
+#
+# `prior_bev.yaml` carries the paper's schedule at the paper's batch size, which
+# wants an A100-class card and more cores than this box has. Nothing about the
+# method changes here -- only what fits:
+#
+#   * 1280 px at batch 2 with gradient checkpointing. Batch 4 at 1280 does not
+#     fit in 23 GB, and the top resolution is also the slowest, so it is drawn
+#     less often as well (`gpu24.yaml` makes the same two trades).
+#   * 6 dataloader workers against 8 cores. The prior pool is built in the
+#     worker, so each one holds up to `prior_pool_cache` merged pools -- a
+#     median pool is ~1.4 MB, a p90 one ~7 MB, so 6 x 24 is a few hundred MB.
+#   * 8 preprocess workers, which is every core.
+extends: bevaligner/configs/prior_bev.yaml
+run_name: prior_bev_l4
+model:
+  gradient_checkpointing: true
+data:
+  resolution_weights: [0.35, 0.30, 0.20, 0.15]
+  batch_size_per_resolution: {1280: 2}
+  num_workers: 6
+  preprocess_workers: 8
+optimizer:
+  # batch 2 at the top resolution, so the effective batch stays the paper's
+  accumulate_grad_batches: 2

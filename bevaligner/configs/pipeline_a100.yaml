@@ -1,0 +1,15 @@
+# The stratified run on the A100 40 GB, bf16. Splits, cache, a one-batch check
+# of the real training config, train, score the test split.
+#
+# The smoke stage runs a100.yaml itself rather than t4_smoke: the point here is
+# that this batch size and resolution fit in 40 GB before hours go into it.
+extends: bevaligner/configs/pipeline_defaults.yaml
+run_name: a100_stratified
+train_config: bevaligner/configs/a100.yaml
+smoke_config: bevaligner/configs/a100.yaml
+stages: [splits, preprocess, smoke, train, eval]
+preprocess:
+  workers: 12
+eval:
+  qualitative: 47
+  images_plot: true

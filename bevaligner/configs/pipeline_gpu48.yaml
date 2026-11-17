@@ -1,0 +1,6 @@
+# The stratified run on a 48 GB card.
+extends: bevaligner/configs/pipeline_defaults.yaml
+run_name: gpu48_stratified
+train_config: bevaligner/configs/gpu48.yaml
+preprocess:
+  workers: 32

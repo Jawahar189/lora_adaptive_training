@@ -1,0 +1,187 @@
+# Every number the paper states, set to what the paper states.
+#
+# The point of this config is to make the reimplementation's departures
+# *visible*: anything set below is a paper number, and anything left inherited
+# is either unstated in the paper or a documented departure (listed at the
+# bottom). A run from here is the closest this repo gets to arXiv 2605.22581
+# (Cho, Cai, Averbuch-Elor), so it is the run to compare published numbers to.
+#
+# Scale. The paper trains 1 epoch over ~280K augmented samples at batch 4 --
+# 70000 steps. The a100_dinov3 default of 100000 samples is 25000, and that
+# matters more than it looks: the curriculum gates are FRACTIONS, so a short
+# run silently shrinks every phase. At 280000 the paper's own 10%/20% gates
+# give 7000 feature-only steps, which is what the paper's schedule means.
+# a100_dinov3_v2's later gates exist only to compensate for the short run --
+# do not carry them here, or the feature-only phase becomes 21000 steps, three
+# times the paper's.
+# This extends defaults, not a100_dinov3, on purpose. a100.yaml halves the
+# batch at the top resolution and keys that on 1260, DINOv2's patch-14 grid;
+# under patch 16 the entry is dead but still present, and `_deep_merge` merges
+# dicts, so an empty override cannot remove it. Inheriting from defaults is the
+# only way to say "batch 4 everywhere, as the paper" and have it be true.
+extends: bevaligner/configs/defaults.yaml
+run_name: paper_faithful
+data:
+  # 75/15/10 by structure, stratified on reality count x sheet area, cut from
+  # the 12295 realities preprocessing kept (datasets/manifest_usable.csv) so
+  # the 6 structures with nothing usable do not take a place in the ratio.
+  # Structure-disjoint: a building's sheet is never in two splits. test is held
+  # back for the final eval and nothing below reads it.
+  csv_files:
+  - datasets/splits/all_19aug_23sep_train.csv
+  val_csv_files:
+  - datasets/splits/all_19aug_23sep_val.csv
+  # The paper matches against a drawing and this branch matches against the
+  # previous capture, so the published POSE numbers are no longer the thing
+  # being reproduced -- what survives here is the paper's training schedule,
+  # which is target-agnostic. The splits above were also cut from the rows a
+  # floor-plan run could use, which required a design transform; the prior
+  # target does not, so this config now sees a subset of what is available.
+  # `prior_bev.yaml` is the honest denominator.
+  prior_csv_files:
+  - /mnt/align-data/datasets/manifest_all_19_aug_23_sep_prior.csv
+  # 1 epoch x 400000 samples / batch 4 = 100000 steps, the paper's iteration count
+  samples_per_epoch: 400000
+  # the paper's four training resolutions, and no stated preference among them
+  resolutions: [512, 768, 1024, 1280]
+  resolution_weights: [0.25, 0.25, 0.25, 0.25]
+  batch_size: 4
+  num_workers: 10
+  # The paper augments per scene, so its ~400K is ~800 samples for each of 500
+  # scenes -- every scene equally, whatever was captured there. 0.0 is that
+  # shape: a structure's survey count buys it nothing. Walking realities
+  # instead spans 538x, with the top 10% of buildings taking half the epoch.
+  # The two inner draws still apply, so one long survey cannot outvote a short
+  # sibling either; only `power` is being set to the paper's reading.
+  structure_balance: 0.0
+  # "fixed to 512x512 at inference time, but we vary it during training"
+  eval_resolution: 512
+  queries_per_sample: 1024              # the paper's Q = 1024
+optimizer:
+  learning_rate: 0.0001                 # the paper's 1e-4, AdamW
+  gradient_clip_norm: 1.0               # "maximum norm of 1.0"
+loss:
+  weights:
+    feature: 1.0                        # the paper's lambda: 1 / 50 / 10 / 10
+    regression: 50.0
+    topology: 10.0
+    geometry: 10.0
+  # "During the first 10% of training iterations, the network is trained only
+  # using the feature matching loss. From 10% to 20%, the coordinate regression
+  # loss is introduced. For the remaining iterations, we also incorporate the
+  # structural regularization terms."
+  gates:
+    feature: 0.0
+    regression: 0.1
+    topology: 0.2
+    geometry: 0.2
+  # the paper describes a step, not a ramp, so the ramp is off here even though
+  # it is on in defaults -- gate_ramp is this repo's answer to weight 50 landing
+  # whole on features that are not ready, and it is not in the paper
+  gate_ramp: 0.0
+  # The paper's L_regr is sum(w*H)/sum(w) with w the max softmax probability,
+  # and carries NO stop-gradient on w -- in L_regr or L_topo. That silence is
+  # deliberate: sg() appears one loss over, on the weighted mean in L_geo
+  # (which geometry.py reproduces unconditionally). So attached confidence is
+  # the paper's, and this is the one knob where being faithful means taking on
+  # a known risk: dL/dw_i = (e_i - L)/sum(w), so every query with above-average
+  # error is paid to lower its own confidence, and w_i IS the softmax peak --
+  # lowering it flattens the distribution, whose expectation is the prediction.
+  # That is the collapse d55103f added pred_spread_patches to name. Watch it
+  # from the regression gate at step 7000; if it climbs, the answer is
+  # defaults' detach_confidence: true, and the departure is then measured
+  # rather than assumed.
+  detach_confidence: false
+  # The paper's InfoNCE is plain: pair i is the positive, all other Q-1 pairs
+  # are negatives. This repo masks pairs whose targets land within a patch of
+  # the anchor's, because with 1024 queries on a capture spanning a median 108
+  # floorplan patches many pairs SHARE a target, and as negatives they ask the
+  # features to separate points the network cannot tell apart -- measured, the
+  # loss rose above log 1024 on this data.
+  #
+  # 0 turns the mask off, which is the paper. It is here for the same reason
+  # gate_ramp and detach_confidence are: those two are taken on faith that the
+  # paper's recipe works, and it would be incoherent to keep this one fix on
+  # faith that it does not. The tell is val/match/feature_margin_nats -- zero
+  # is chance, negative is worse than chance -- and it reads within the first
+  # few thousand steps, long before the regression gate at 7000. If it will
+  # not leave zero, defaults' 1.0 is the answer and the departure is then
+  # measured rather than assumed.
+  near_duplicate_radius: 0.0
+model:
+  temperature: 0.07                     # the paper's tau
+  lora_rank: 16                         # r = 16, alpha = 16, dropout 0.1, and
+  lora_alpha: 16.0                      # lora.py puts them on attention q/k/v/o
+  # NOTE: this 0.1 did nothing until the training-flag fix -- the adapters were
+  # never in train mode. It is kept, and now actually applies, because paper
+  # fidelity is what this file is for. Every other config defaults to 0.0.
+  lora_dropout: 0.1                     # and mlp up/down of all 12 blocks, as
+  backbone_family: dinov3               # the paper specifies. DINOv3 ViT-B/16.
+  pretrained_id: cache/dinov3/vitb16_lvd1689m
+  gradient_checkpointing: false
+trainer:
+  max_epochs: 1                         # "train the network for 1 epoch"
+  val_check_interval: 4000              # ~17 validations across 70000 steps
+  # 400 batches of 2 is 800 of the val split's 1844 realities, reaching 87 of
+  # its 89 structures. The default 20 reads 40 realities and lands in 23, so
+  # two thirds of the split cannot move the curve at all; the whole split is
+  # 922 and buys the last 2 structures for twice the cost. A val batch is
+  # forward-only at 512, so ~20 of them cost one training step: this is about
+  # 0.5% of the run.
+  val_batches: 400
+  # Select on the correspondence metric, report on the pose one. tpr@1m over 20
+  # captures has a standard error near 0.11, and best-of-17-validations turns
+  # that into ~0.2 of upward bias -- it would pick the luckiest validation, not
+  # the best model. PCK measures the same inlier rate RANSAC consumes, over
+  # ~800 realities. tpr stays logged, and the number to quote is the one the
+  # held-out test split gives at the end.
+  #
+  # 10% is the paper's own threshold ("normalised by the floorplan
+  # resolution", reported at {1,3,5,10,15,30}%), so the number is comparable
+  # with its tables -- 51 px of the 512 crop, against pck@2p's 32 px. The
+  # paper does not select checkpoints at all, so nothing here is less faithful
+  # than the alternative; 10% is chosen over 1% because a tight threshold is
+  # near zero for the first third of the run and would rank noise.
+  monitor: val/match/pck_within_10pct_of_crop
+  precision: bf16-mixed                 # not stated in the paper; this box's default
+  val_pose_eval_captures: 20
+
+# What is still NOT the paper, and cannot be set here:
+#
+# - Where the data comes from, which is the root of most of the rest. The paper
+#   reconstructs each scene from an image collection; here the clouds already
+#   exist. So its ~280K augmented samples vary the RECONSTRUCTION -- two models
+#   (pi3, VGGT) x two preprocessing modes x randomised thresholds -- and this
+#   run's vary the rendering of one fixed cloud: band, gamma, crop, point
+#   dropout, colour jitter. Scene count is close (445 train structures against
+#   the paper's 463) and `structure_balance: 0.0` now matches its per-scene
+#   shape, but the diversity behind each sample is a different quantity.
+# - Scene-floorplan pairs. The paper has 498 over 463 scenes, ~1.08 sheets per
+#   building; this dataset has exactly one.
+# - The vertical band. The paper keeps [20%, 95%] of the gravity-aligned range;
+#   this keeps [-0.85, +0.25] relative to camera height (align/cloud.py). Same
+#   intent -- walls, not floor or ceiling -- from different information. This
+#   one COULD be reparameterised to percentiles; it has not been.
+# - rho_conf = 45%, the paper's filter on reconstruction confidence. No
+#   equivalent exists for a cloud that arrives finished; min_source_frames: 2
+#   stands in and is not the same test.
+# - loss.huber_delta = 1 patch, loss.num_triplets / num_pairs = 2048,
+#   optimizer.weight_decay / warmup_steps / final_lr_fraction, precision, and
+#   every RANSAC setting. None are stated in the paper; left at this repo's
+#   defaults, where they can be neither faithful nor unfaithful.
+# - Three readings this repo had to pick because the paper is silent: PCK
+#   normalised by the crop's long side rather than its diagonal; camera recall
+#   averaged over captures rather than pooled over cameras; and "within 30 deg
+#   AND 20%" resolved as half a capture's cameras inside 20%. Each shifts the
+#   numbers against the paper's tables.
+#
+# What the paper states and this config therefore does NOT inherit from
+# defaults: gate_ramp, detach_confidence and near_duplicate_radius. All three
+# are this repo's answers to a failure it watched happen, all three are right
+# as defaults, and all three are off here -- because a config that keeps the
+# fixes cannot tell you whether the paper's recipe needed them on this data.
+# Each has a scalar that calls it early:
+#
+#   near_duplicate_radius  val/match/feature_margin_nats stuck at or below 0
+#   detach_confidence      val/match/prediction_spread_patches falling to 0
+#   gate_ramp              val/loss/total jumping at step 7000 and not decaying

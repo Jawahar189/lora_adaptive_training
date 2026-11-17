@@ -1,0 +1,16 @@
+# The A100 run with the paper's backbone. Everything but the backbone and its
+# patch size comes from a100.yaml: patch 16, so the paper's own resolutions.
+#
+# The weights are Meta's dinov3_vitb16_pretrain_lvd1689m-73cec8be.pth, converted
+# to Hugging Face format with transformers' convert_dinov3_vit_to_hf.py (its
+# reference forward pass matched), since the hub copy is gated.
+extends: bevaligner/configs/a100.yaml
+run_name: a100_dinov3
+model:
+  backbone_family: dinov3
+  pretrained_id: cache/dinov3/vitb16_lvd1689m
+data:
+  resolutions: [512, 768, 1024, 1280]
+  # batch 4 at every size, as the paper: the A100 sweep found halving the top
+  # resolution bought no throughput, and 1280/16 is fewer tokens than 1260/14
+  eval_resolution: 1024

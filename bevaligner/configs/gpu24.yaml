@@ -1,0 +1,13 @@
+# The target run: a 24 GB card (L4 / A10G / 4090). Paper's batch 4; 1280 at
+# batch 2 with accumulation so it fits.
+extends: bevaligner/configs/defaults.yaml
+run_name: gpu24
+model:
+  gradient_checkpointing: true
+data:
+  resolutions: [512, 768, 1024, 1280]
+  resolution_weights: [0.35, 0.30, 0.20, 0.15]
+  batch_size_per_resolution: {1280: 2}
+trainer:
+  val_check_interval: 2000
+  val_pose_eval_captures: 20

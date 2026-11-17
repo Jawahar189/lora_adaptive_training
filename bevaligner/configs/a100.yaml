@@ -1,0 +1,20 @@
+# The run on an A100-SXM4 40 GB: bf16, no checkpointing, batch 4 below the top
+# resolution. DINOv2 until the DINOv3 weights are ungated, as on the T4, so
+# resolutions are multiples of patch 14 and the two runs stay comparable.
+extends: bevaligner/configs/defaults.yaml
+run_name: a100
+model:
+  backbone_family: dinov2
+  gradient_checkpointing: false
+data:
+  resolutions: [504, 756, 1008, 1260]
+  resolution_weights: [0.35, 0.30, 0.20, 0.15]
+  # 40 GB sits between gpu24 (checkpointed, 2 at the top) and gpu48 (4 at
+  # every size, no checkpointing): drop checkpointing, halve only the top
+  batch_size_per_resolution: {1260: 2}
+  eval_resolution: 1008
+  num_workers: 10           # 12 cores on this box
+trainer:
+  precision: bf16-mixed
+  val_check_interval: 2000
+  val_pose_eval_captures: 20

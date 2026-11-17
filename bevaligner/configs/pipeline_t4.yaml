@@ -1,0 +1,20 @@
+# The stratified run on the local Tesla T4 (16 GB, no bf16), DINOv2 until the
+# DINOv3 weights are ungated. Splits, cache, train, score the test split.
+#
+# No smoke stage: the training config here is already the small one, so a
+# one-batch check of it proves nothing the first validation would not.
+extends: bevaligner/configs/pipeline_defaults.yaml
+run_name: t4_stratified
+train_config: bevaligner/configs/t4_smoke.yaml
+# t4_smoke is sized for a thousand-step check. These make it a run: a virtual
+# epoch worth training through, validation often enough to choose a checkpoint
+# without dominating the run, and the paper's curriculum gates back -- the
+# smoke moves them late only because it is too short for them.
+train_overrides:
+  - data.samples_per_epoch=40000
+  - trainer.val_check_interval=2000
+  - "loss.gates={feature: 0.0, regression: 0.1, topology: 0.2, geometry: 0.2}"
+stages: [splits, preprocess, train, eval]
+eval:
+  qualitative: 47
+  images_plot: true

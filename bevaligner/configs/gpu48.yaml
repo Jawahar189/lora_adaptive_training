@@ -1,0 +1,12 @@
+# Paper-faithful on a 48 GB card (A6000 / L40S): batch 4 at every resolution,
+# no checkpointing, the paper's sample count.
+extends: bevaligner/configs/defaults.yaml
+run_name: gpu48
+data:
+  resolutions: [512, 768, 1024, 1280]
+  resolution_weights: [0.25, 0.25, 0.25, 0.25]
+  samples_per_epoch: 280000
+  num_workers: 16
+trainer:
+  val_check_interval: 4000
+  val_pose_eval_captures: 20

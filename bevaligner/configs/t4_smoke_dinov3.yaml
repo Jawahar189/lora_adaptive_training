@@ -1,0 +1,10 @@
+# Same smoke test with the paper's backbone, once the gated weights are available.
+# Everything but the backbone and its patch size comes from the DINOv2 smoke,
+# including its loosened loss gates -- the run is the same 4000 samples long.
+extends: bevaligner/configs/t4_smoke.yaml
+run_name: t4_smoke_dinov3
+model:
+  backbone_family: dinov3
+data:
+  resolutions: [512, 768, 1024]
+  eval_resolution: 1024

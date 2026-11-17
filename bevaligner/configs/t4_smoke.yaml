@@ -1,0 +1,25 @@
+# Smoke test on the local Tesla T4 (16 GB, no bf16). DINOv2 until the DINOv3
+# token arrives: patch 14, so resolutions are multiples of 14.
+extends: bevaligner/configs/defaults.yaml
+run_name: t4_smoke
+model:
+  backbone_family: dinov2
+  gradient_checkpointing: true
+data:
+  resolutions: [504, 756, 1008]
+  resolution_weights: [0.4, 0.35, 0.25]
+  batch_size: 2
+  eval_resolution: 1008
+  samples_per_epoch: 4000
+  num_workers: 8
+optimizer:
+  accumulate_grad_batches: 2
+  warmup_steps: 100
+trainer:
+  precision: 16-mixed
+  val_check_interval: 500
+  val_pose_eval_captures: 10
+loss:
+  # a 1000-step smoke is too short for the paper's 10 % / 20 % gates: the
+  # features have not converged when the regression term (weight 50) arrives
+  gates: {feature: 0.0, regression: 0.3, topology: 0.5, geometry: 0.5}

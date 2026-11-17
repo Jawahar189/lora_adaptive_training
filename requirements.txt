@@ -1,0 +1,92 @@
+# Python dependencies for the `align` package, `scripts/`, and `tests/`.
+#
+#   python3 -m venv .venv
+#   .venv/bin/pip install -r requirements.txt
+#
+# Versions below are the ones this project is developed and tested against
+# (Python 3.10). Lower bounds are the oldest release known to work; upper
+# bounds are only set where a major version is known to break us.
+
+# --- Runtime: required by the align package itself -------------------------
+
+# Arrays, FFT correlation, and every geometry primitive in align/.
+# Pinned below 2.0 because that is what the pipeline is validated on; the
+# code itself uses no numpy-1.x-only APIs, so the cap can be lifted after a
+# full re-run of tests/ and scripts/run_all.py.
+numpy>=1.24,<2.0
+
+# scipy.spatial.cKDTree for point-cloud nearest-neighbour work (align/cloud.py)
+# and the optimisation/linear-algebra helpers used by the solver.
+scipy>=1.10
+
+# The IMU repo's resolve stage (external/imu_based_scale_resolution, run by
+# bevaligner/data/imu.py in this interpreter) imports pandas at the top of its
+# batch runner. Its figures need matplotlib too, but resolve draws none.
+pandas>=2.0
+
+# PIL.Image / ImageDraw / ImageFont: sheet loading and all visual output
+# (align/sheet.py, align/viz.py).
+pillow>=10.0
+
+# cv2: rasterisation, warping, and image-space error maps (align/sheet.py,
+# align/cloud.py, align/viz.py). Headless build — this project never opens a
+# GUI window, and the headless wheel avoids pulling in system GTK/Qt libs.
+opencv-python-headless>=4.9
+
+# torch: the GPU search backend, and the default one. align/search.py picks
+# its FFT backend at runtime — get_backend("auto") returns the torch backend
+# whenever torch imports, and _Torch uses cuda whenever torch.cuda is
+# available — so installing torch here is what makes GPU acceleration the
+# default for `--backend auto` (the default of run_alignment.py and solve.py).
+#
+# Pinned to the exact cu121 build this project runs on. The +cu121 wheel lives
+# only on the PyTorch index below, not on PyPI, so the extra index is required
+# for this line to resolve. Change both the tag and the index URL together to
+# move to another CUDA version.
+#
+# Falling back: nothing breaks without a GPU. torch drops to CPU when
+# torch.cuda.is_available() is false, and `--backend numpy` forces the pure
+# numpy path, which tests/test_search.py::test_backends_agree asserts gives
+# the same results.
+--extra-index-url https://download.pytorch.org/whl/cu121
+torch==2.5.1+cu121
+
+# --- Optional: notebooks ----------------------------------------------------
+#
+# Only notebooks/analysis_start_point.ipynb needs these; nothing under align/,
+# scripts/, or tests/ imports them. Install with:
+#
+#   .venv/bin/pip install jupyterlab matplotlib
+#
+# jupyterlab
+# matplotlib>=3.8
+
+# --- Development ------------------------------------------------------------
+
+# Test runner for tests/.
+pytest>=7.0
+
+# panorama place recognition (align/visual.py); weights come from the Hugging Face hub
+transformers==5.18.0
+safetensors
+huggingface_hub
+
+# --- BEVAligner training (bevaligner/) ---------------------------------
+#
+# The learned density-map <-> floor-plan matcher (arXiv 2605.22581) trains
+# with PyTorch Lightning; nothing under align/ imports these.
+lightning>=2.4,<2.6
+tensorboard
+pyyaml
+
+# COLMAP's LO-RANSAC, used by bevaligner/inference/verify.py to drop the
+# BEV correspondences no single planar motion can explain, before the Sim2 fit
+# ever sees them. SOFT-IMPORTED: without the wheel `verify_matches` returns
+# None, verification is skipped and the pipeline behaves exactly as it did
+# before -- so this line is required only to USE --geometric-verification,
+# never to run the package. The wheel is self-contained (it vendors COLMAP's
+# own libraries); no `colmap` binary on PATH is needed.
+#
+# Its numpy requirement is unpinned, so it does not fight the numpy<2.0 cap
+# above. cp310/cp311/cp312 manylinux wheels are published.
+pycolmap>=4.2,<5

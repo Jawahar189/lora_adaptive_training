@@ -1,0 +1,57 @@
+# Current BEV -> prior BEV, over the whole 19 Aug - 23 Sep export.
+#
+# The training schedule is `paper_faithful`'s, because that part of the paper is
+# target-agnostic; what differs is what the capture is matched against. See
+# `docs/PRIOR_CAPTURE.md` for why the drawing was the wrong target, and
+# `bevaligner/data/prior_bev.py` for how the prior becomes the right one.
+#
+# The denominator. `..._current_with_prior.csv` is the full 13,485-row current
+# index already filtered to the 11,177 rows that name a prior capture, so the
+# 2,308 that never could have had a target are gone before the run starts
+# rather than counted as failures inside it. 11,160 of those resolve to a
+# non-sibling pool in the prior manifest; the 17 that do not name only splits of
+# their own capture. Of those, 77.1% have at least one prior split whose camera
+# box meets the walk's, which is the gate, and about 90% prepare -- so expect
+# roughly 7,700 usable rows. `cache/bevaligner/manifest.csv` says why every
+# dropped row was dropped.
+#
+# No `design_tm` is required. `target_to_paper` is the identity without one, so
+# both sides still land in a single frame; it was the sheet that had no geometry
+# to land on. That admits the 1,782 `no_world_transform` rows, whose prior
+# coverage measured better than the georeferenced ones (median 1.00 vs 0.48).
+# Their metre scale is a rig-height estimate, so the pose callback logs
+# `scale_from_design_tm_fraction` and a metres figure for that subset alone.
+extends: bevaligner/configs/defaults.yaml
+run_name: prior_bev
+model:
+  # the gated facebook/dinov3-vitb16-pretrain-lvd1689m, fetched once and kept in
+  # the repo. Naming the path rather than the hub id is what makes a run work
+  # without a token, and without depending on which HF_HOME the shell happens to
+  # have -- `paper_faithful.yaml` does the same.
+  pretrained_id: cache/dinov3/vitb16_lvd1689m
+data:
+  # 75/15/10 by STRUCTURE, stratified on reality count x sheet area, cut from
+  # the 11,177 rows that name a prior (scripts/stratified_splits.py --prefix
+  # prior_bev). Structure-disjoint, which is also what keeps a PAIR together: a
+  # row and every prior split it is matched against share a structure. test is
+  # held back for the final eval and nothing below reads it.
+  csv_files:
+  - datasets/splits/prior_bev_train.csv
+  val_csv_files:
+  - datasets/splits/prior_bev_val.csv
+  prior_csv_files:
+  - /mnt/align-data/datasets/manifest_all_19_aug_23_sep_prior.csv
+  split_seed: 0
+  samples_per_epoch: 400000
+  resolutions: [512, 768, 1024, 1280]
+  resolution_weights: [0.25, 0.25, 0.25, 0.25]
+  batch_size: 4
+  num_workers: 10
+  preprocess_workers: 16
+  # the capture, not the reality, is the unit of independent information
+  structure_balance: 0.0
+  eval_resolution: 512
+  queries_per_sample: 1024
+trainer:
+  val_check_interval: 2000
+  val_pose_eval_captures: 20
